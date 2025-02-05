@@ -1,0 +1,35 @@
+GDI CHK
+-------
+
+Dreamcast disc image utility that checks console dumps integrity.
+
+ - Compares hashes and identifies disc name in TOSEC
+ - Compares hashes and identifies disc name in Redump
+
+Works on GNU/Linux x86-64 with Bash.
+
+Usage
+-----
+
+ 1. Copy dump files to the gd directory
+    These should be named disc.gdi, track01.bin, track02.raw, etc
+
+ 2. Open a terminal and execute ./check
+    ./check -d is required to download the database the first time
+
+ Optional arguments
+
+ -d : download database
+ -v : print version
+
+Source
+------
+
+https://github.com/jonblau/gdichk
+
+License
+-------
+
+SPDX-License-Identifier: GPL-3.0-or-later
+
+Copyright (C) 2025 Jon Blau

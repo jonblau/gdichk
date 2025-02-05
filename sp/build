@@ -1,0 +1,21 @@
+#!/bin/bash
+
+echo -en "compiling read.c"
+gcc read.c -o read &> /dev/null && read_status='success'
+
+if [[ "${read_status}" == 'success' ]]
+
+then echo -e "\t\e[42m success \e[0m "
+else echo -e "\t\e[41m failure \e[0m"
+
+fi
+
+echo -en "compiling write.c"
+gcc write.c -o write &> /dev/null && write_status='success'
+
+if [[ "${write_status}" == 'success' ]]
+
+then echo -e "\t\e[42m success \e[0m "
+else echo -e "\t\e[41m failure \e[0m"
+
+fi

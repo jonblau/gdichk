@@ -1,0 +1,902 @@
+#!/bin/bash
+
+# GDI CHK
+# Dreamcast disc image utility that checks console dumps integrity
+# Copyright (c) 2025 Jon Blau
+
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#  GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+#  along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+# Script version
+
+declare -r version="1.0"
+
+# Script path
+
+declare -r path="$(cd "$(dirname "${0}")" || exit 1 ; pwd -P)"
+declare -r temp="$(mktemp --directory)"
+
+# Script argument
+
+[[ "${1}" == '-d' ]] && declare -r d_arg='true'
+[[ "${1}" == '-v' ]] && declare -r v_arg='true'
+
+# Setup management
+
+function check_setup
+{
+     local setup_error='false'
+
+     check_command
+     [[ "${setup_error}" == 'true' ]] && exit 2
+
+     check_program
+     [[ "${setup_error}" == 'true' ]] && exit 2
+
+     check_database
+     [[ "${setup_error}" == 'true' ]] && exit 2
+
+     check_gdrom
+     [[ "${setup_error}" == 'true' ]] && exit 2
+}
+
+function check_command
+{
+     IFS=" "
+     declare -a command_list=('curl' 'md5sum' 'unzip' 'wget')
+     declare -i command_count=${#command_list[@]}
+
+     for (( i=0 ; i<${command_count} ; i++ )) ; do
+
+          if ! command -v "${command_list[i]}" &> /dev/null ; then
+
+               setup_error='true'
+               echo -e "\e[01;31mError: not installed: ${command_list[i]}\e[0m"
+
+          fi
+
+     done
+}
+
+function check_program
+{
+     read="sp/read"
+     [[ ! -x "${read}" ]] && {
+
+          setup_error='true'
+          echo -e "\e[01;31mError: not executable: ${read}\e[0m" ; }
+
+     write="sp/write"
+     [[ ! -x "${write}" ]] && {
+
+          setup_error='true'
+          echo -e "\e[01;31mError: not executable: ${write}\e[0m" ; }
+
+     edcre="sp/edcre"
+     [[ ! -x "${edcre}" ]] && {
+
+          setup_error='true'
+          echo -e "\e[01;31mError: not executable: ${edcre}\e[0m" ; }
+}
+
+function check_database
+{
+     tosec="db/tosec.dat"
+     [[ ! -s "${tosec}" ]] && {
+
+          setup_error='true'
+          echo -e "\e[01;31mError: not found: ${tosec}\e[0m" ; }
+
+     redump="db/redump.dat"
+     [[ ! -s "${redump}" ]] && {
+
+          setup_error='true'
+          echo -e "\e[01;31mError: not found: ${redump}\e[0m" ; }
+}
+
+function check_gdrom
+{
+     dot_bin="gd/track*.bin"
+     dot_raw="gd/track*.raw"
+     dot_gdi="gd/disc.gdi"
+
+     IFS=$'\n'
+     file_list=($(ls -1 ${dot_bin} ${dot_raw} 2> /dev/null))
+     file_count=${#file_list[@]}
+
+     [[ ! -s "${dot_gdi}" ]] &&
+     {
+          setup_error='true'
+          return 1
+     }
+
+     local track_count="$(head --lines=1 "${dot_gdi}")"
+           track_count="${track_count:0:-1}"
+
+     [[ "${track_count}" != "${file_count}" ]] &&
+     {
+          setup_error='true'
+          return 1
+     }
+}
+
+function download_database
+{
+     test_connection
+
+     mkdir --parents db dl
+
+     download_tosec
+     extract_tosec
+
+     download_redump
+     extract_redump
+
+     exit 0
+}
+
+function test_connection
+{
+     if ! wget --quiet --spider https://github.com/ ; then
+
+          echo -e "\e[01;31mError: not connected\e[0m"
+          exit 3
+
+     fi
+}
+
+function download_tosec
+{
+     declare -r cg_regexp="category/[0-9]\+-[0-9]\+-[0-9]\+-[0-9]\+"
+     declare -r dl_regexp="download=[0-9]\+:tosec-dat-pack-complete-[0-9]\+-tosec-"
+
+     local cg="$(curl --silent https://www.tosecdev.org/downloads | grep --max-count=1 --only-matching "${cg_regexp}")"
+     local dl="$(curl --silent https://www.tosecdev.org/downloads/${cg} | grep --max-count=1 --only-matching "${dl_regexp}")"
+
+     tosec_url="https://www.tosecdev.org/downloads/${cg}?${dl}v${cg:9}"
+
+     echo "Downloading TOSEC"
+     echo -en "wait\r"
+
+     if wget --quiet --continue "${tosec_url}" --output-document='dl/tosec_dat.zip'
+
+     then echo "done"
+     else echo "wget error ${?}"
+          exit 4
+
+     fi
+}
+
+function extract_tosec
+{
+     echo "Extracting TOSEC"
+     echo -en "wait\r"
+
+     if unzip -UU dl/tosec_dat.zip -d "${temp}/tosec/" &> /dev/null
+
+     then echo "done"
+     else echo "unzip error ${?}"
+          exit 5
+
+     fi
+
+     IFS=$'\n'
+     declare -a dat_path=($(ls -1 ${temp}/tosec/TOSEC-ISO/*Dreamcast* 2> /dev/null))
+
+     cat "${dat_path[@]}" > db/tosec.dat
+}
+
+function download_redump
+{
+     redump_url="http://redump.org/datfile/dc/"
+
+     echo "Downloading Redump"
+     echo -en "wait\r"
+
+     if wget --quiet --continue "${redump_url}" --output-document='dl/redump_dat.zip'
+
+     then echo "done"
+     else echo "wget error ${?}"
+          exit 4
+
+     fi
+}
+
+function extract_redump
+{
+     echo "Extracting Redump"
+     echo -en "wait\r"
+
+     if unzip dl/redump_dat.zip -d "${temp}/redump/" &> /dev/null
+
+     then echo "done"
+     else echo "unzip error ${?}"
+          exit 5
+
+     fi
+
+     local dat_path="$(ls "${temp}/redump" 2> /dev/null)"
+
+     mv "${temp}/redump/${dat_path}" db/redump.dat
+}
+
+function get_version
+{
+     tosec_version="$(grep --max-count=12 '<version>' "${tosec}")"
+
+     tosec_j_version="$(echo "${tosec_version}" | head --lines=10 | tail --lines=1)"
+     tosec_j_version="${tosec_j_version:11:10}"
+     tosec_u_version="$(echo "${tosec_version}" | head --lines=12 | tail --lines=1)"
+     tosec_u_version="${tosec_u_version:11:10}"
+     tosec_e_version="$(echo "${tosec_version}" | head --lines=11 | tail --lines=1)"
+     tosec_e_version="${tosec_e_version:11:10}"
+
+     redump_version="$(grep --max-count=1 '<version>' "${redump}")"
+     redump_version="${redump_version:11:10}"
+}
+
+function print_version
+{
+     echo -e "GDI CHK ${version}\n"
+
+     echo -e "TOSEC-J\t ${tosec_j_version}"
+     echo -e "TOSEC-U\t ${tosec_u_version}"
+     echo -e "TOSEC-E\t ${tosec_e_version}"
+     echo -e "Redump \t ${redump_version}"
+
+     exit 0
+}
+
+# Disc information
+
+function get_disc_info
+{
+     declare -r header_track="gd/track01.bin"
+
+     if [[ ! -s "${header_track}" ]] ; then
+
+          echo -e "\n\e[01;31mError: missing ${header_track}\e[0m"
+          exit 6
+
+     fi
+
+     header_info="$(head --bytes=272 "${header_track}" | tail --bytes=256)"
+
+     header_region="${header_info:48:3}"
+     header_region="${header_region//' '}"
+     header_serial="${header_info:64:10}"
+     header_serial="${header_serial//' '}"
+     header_revision="${header_info:74:6}"
+     header_revision="${header_revision//' '}"
+
+     header_format="${header_info:37:6}"
+     header_number="${header_info:43:3}"
+     header_year="${header_info:80:4}"
+     header_month="${header_info:84:2}"
+     header_day="${header_info:86:2}"
+
+     header_title="${header_info:128}"
+
+     while [[ "${header_title: -1}" == " " ]] ; do
+
+          header_title="${header_title:0:-1}"
+
+     done
+
+     case "${header_region}" in
+
+          'J') video_system='NTSC-J' ; region_color=33 ;;
+          'U') video_system='NTSC-U' ; region_color=33 ;;
+          'E') video_system='PAL-E'  ; region_color=34 ;;
+
+          'JU') video_system='NTSC'  ; region_color=33 ;;
+
+          *) video_system='NTSC/PAL' ; region_color=37 ;;
+
+     esac
+
+     print_disc_info
+}
+
+function print_disc_info
+{
+     echo "${header_title}"
+     echo "${video_system} ${header_revision} ${header_year}/${header_month}/${header_day}"
+     echo -e "${header_format} ${header_number} ${header_serial}\n"
+}
+
+# File information
+
+function get_file_info
+{
+     local layout_error='false'
+
+     for (( i=0 ; i<${file_count} ; i++ )) ; do
+
+          file_path[i]="${file_list[i]}"
+
+          file_name[i]="$(get_name "${file_list[i]}")"
+          file_size[i]="$(get_size "${file_list[i]}")"
+          file_hash[i]="$(get_hash "${file_list[i]}")"
+
+          get_layout
+
+     done
+
+     if [[ "${layout_error}" == 'true' ]] ; then
+
+          echo -e "\n\e[01;31mError: altered track layout\e[0m"
+          exit 7
+
+     fi
+
+     gdi_hash="$(get_hash "${dot_gdi}")"
+}
+
+function get_name
+{
+     local file="${1}"
+     local name="$(basename "${file}")"
+
+     echo "${name}"
+}
+
+function get_size
+{
+     local file="${1}"
+     local size="$(wc -c < "${file}")"
+
+     echo "${size}"
+}
+
+function get_hash
+{
+     local file="${1}"
+     local hash="$(md5sum "${file}")"
+           hash="${hash:0:32}"
+
+     echo "${hash}"
+}
+
+function get_layout
+{
+     check_status "${file_name[i]}" "${file_hash[i]}"
+
+     IFS=" "
+     declare -a track_info=($(head --lines=$((${i}+2)) "${dot_gdi}" | tail --lines=1))
+
+     local track_number="${track_info[0]}"
+     local track_start="${track_info[1]}"
+     local track_end="$((${track_start}+${file_size[i]}/2352-1))"
+     local track_type="${track_info[2]}"
+     local track_sector="${track_info[3]}"
+     local track_name="${track_info[4]}"
+     local track_offset="${track_info[5]:0:-1}"
+
+     check_layout
+     print_layout
+}
+
+function check_status
+{
+     local name="${1}" hash="${2}"
+
+     if grep --quiet --regexp "${name}.*${hash}" "${tosec}"
+
+     then # file is known
+          status_color=32
+     else # file is unknown
+          status_color=31
+
+     fi
+}
+
+function check_layout
+{
+     [[ "${track_name}" != "${file_name[i]}" ]] && layout_error='true'
+}
+
+function print_layout
+{
+     declare -i track_int=${track_number}
+
+     (( ${track_int} <= 9 )) && track_number="0${track_int}"
+     (( ${track_int} >= 10 )) && track_number="${track_int}"
+
+     [[ "${track_type}" == "0" ]] && track_type="AUDIO"
+     [[ "${track_type}" == "4" ]] && track_type="RDATA"
+
+     while (( ${#track_start} != 6 )) ; do
+
+          track_start="0${track_start}"
+
+     done
+
+     while (( ${#track_end} != 6 )) ; do
+
+          track_end="0${track_end}"
+
+     done
+
+     echo -e "${track_number} \e[${status_color}m${track_name}\e[0m [${track_start}-${track_end}] ${track_type} ${track_sector} ${track_offset}"
+}
+
+# TOSEC identification
+
+function identify_tosec
+{
+     for (( i=0 ; i<${file_count} ; i++ )) ; do
+
+          list_tosec "${file_hash[i]}"
+
+     done
+
+     IFS=$'\n'
+     declare -a title_list=($(sort "${temp}/tosec_list" | uniq --repeated --count))
+     declare -i title_count=${#title_list[@]}
+
+     for (( i=0 ; i<${title_count} ; i++ )) ; do
+
+          local title="${title_list[i]:8}"
+          local repeat="${title_list[i]:0:7}"
+
+          if (( ${repeat} >= ${file_count} )) ; then
+
+               tosec_name="${title}"
+               break
+
+          fi
+
+     done
+
+     if [[ ! "${tosec_name}" ]] ; then
+
+          echo -e "\n\e[01;31mError: corrupted dump or unknown disc\e[0m"
+          exit 8
+
+     fi
+
+     check_gdi
+     print_name
+}
+
+function list_tosec
+{
+     local hash="${1}"
+
+     IFS=$'\n'
+     declare -a match_info=($(grep --line-number "${hash}" "${tosec}"))
+     declare -i match_count=${#match_info[@]}
+
+     for (( j=0 ; j<${match_count} ; j++ )) ; do
+
+          local match_line="${match_info[j]%\:*}"
+          local match_track="${match_info[j]%\.*}"
+                match_track="${match_track: -2}"
+
+          if [[ "${match_track:0:1}" == '0' ]] ; then
+
+               match_track="${match_track:1}"
+
+          fi
+
+          local title_line=$((${match_line}-${match_track}-2))
+          local match_title="$(print_line ${title_line} "${tosec}")"
+
+          if [[ ! "${match_title}" =~ "<game name=" ]] ; then
+
+               title_line=$((${title_line}+1))
+               match_title="$(print_line ${title_line} "${tosec}")"
+
+          fi
+
+          match_title="${match_title:13:-3}"
+
+          echo "${match_title}" >> "${temp}/tosec_list"
+
+     done
+}
+
+function print_line
+{
+     local line=${1} file="${2}"
+     local content="$(head --lines=$((${line})) "${file}" | tail --lines=1)"
+
+     echo "${content}"
+}
+
+function check_gdi
+{
+     local gdi_info="$(grep --fixed-strings "${tosec_name}.gdi" "${tosec}")"
+
+     if [[ ! "${gdi_info}" =~ "${gdi_hash}" ]] ; then
+
+          echo -e "\n\e[01;31mError: corrupted or wrong gdi sheet\e[0m"
+          exit 8
+
+     fi
+}
+
+function print_name
+{
+     tosec_name="${tosec_name//'&amp;'/\&}"
+     tosec_name="${tosec_name//'&apos;'/\'}"
+     tosec_name="${tosec_name//'&quot;'/\"}"
+     tosec_name="${tosec_name//'&gt;'/\>}"
+     tosec_name="${tosec_name//'&lt;'/\<}"
+
+     echo -e "\nTOSEC\n\e[${region_color}m${tosec_name}\e[0m"
+}
+
+# Offset calculation
+
+function measure_offset
+{
+     echo -e "\nOffset"
+
+     # low density session
+
+     declare -r audio_low='gd/track02.raw'
+
+     null_low=$(measure_null "${audio_low}")
+     disc_low=$(compute_offset ${null_low})
+
+     print_offset "LD" ${disc_low}
+
+     sp/write -n "${temp}/null_low" ${null_low} &> /dev/null
+
+     # high density session
+
+     declare -r audio_high='gd/track04.raw'
+
+     [[ ! -f "${audio_high}" ]] && return 0
+
+     null_high=$(measure_null "${audio_high}")
+     disc_high=$(compute_offset ${null_high})
+
+     print_offset "HD" ${disc_high}
+
+     sp/write -n "${temp}/null_high" ${null_high} &> /dev/null
+}
+
+function measure_null
+{
+     local track="${1}"
+
+     IFS=" "
+     declare -a byte=($(sp/read "${track}" 5000 0 2> /dev/null))
+     declare -i null=0
+
+     while [[ "${byte[null]}" == "00" ]] ; do
+
+          null+=1
+
+     done
+
+     echo ${null}
+}
+
+function compute_offset
+{
+     local null_size="${1}"
+     local disc_offset=$((${null_size}-2736))
+           disc_offset=$((${disc_offset}/4))
+
+     echo ${disc_offset}
+}
+
+function print_offset
+{
+     local session_type="${1}" disc_offset="${2}"
+
+     echo -n "${session_type}"
+
+     (( ${disc_offset} > 0 )) && echo -e " +${disc_offset}"
+     (( ${disc_offset} <= 0 )) && echo -e " ${disc_offset}"
+}
+
+# Redump identification
+
+function identify_redump
+{
+     list_redump "${file_hash[0]}"
+     list_redump "${file_hash[2]}"
+
+     IFS=$'\n'
+     declare -a title_list=($(sort "${temp}/redump_list" | uniq --repeated))
+     declare -i title_count=${#title_list[@]}
+
+     echo -e "\nRedump"
+
+     for (( i=0 ; i<${title_count} ; i++ )) ; do
+
+          redump_name="${title_list[i]}"
+
+          identify_track
+
+          declare -a fine_list=()
+          declare -a task_list=()
+          declare -i fine_count=0
+          declare -i task_count=0
+          declare -i pass_count=0
+          declare -i fail_count=0
+
+          analyze_track
+
+          declare -i match_count=${fine_count}+${pass_count}
+
+          print_report
+
+     done
+}
+
+function list_redump
+{
+     local hash=${1}
+
+     IFS=$'\n'
+     declare -a match_info=($(grep "${hash}" "${redump}"))
+     declare -i match_count=${#match_info[@]}
+
+     if (( ${match_count} == 0 )) ; then
+
+          echo -e "\n\e[01;31mError: unknown disc\e[0m"
+          exit 9
+
+     fi
+
+     for (( i=0 ; i<${match_count} ; i++ )) ; do
+
+          local match_title="${match_info[i]% (Track [0-9]*}"
+                match_title="${match_title:13}"
+
+          echo "${match_title}" >> "${temp}/redump_list"
+
+     done
+}
+
+function identify_track
+{
+     IFS=$'\n'
+     declare -a rom_info=($(grep "${redump_name} (Track " "${redump}"))
+     declare -i rom_count=${#rom_info[@]}
+
+     if (( ${rom_count} != ${file_count} )) ; then
+
+          echo -e "\n\e[01;31mError: ${rom_count} tracks expected but ${file_count} provided\e[0m"
+          exit 10
+
+     fi
+
+     for (( j=0 ; j<${rom_count} ; j++ )) ; do
+
+          rom_size[j]="$(echo "${rom_info[j]}" | cut --delimiter='"' --fields=4)"
+          rom_hash[j]="$(echo "${rom_info[j]}" | cut --delimiter='"' --fields=8)"
+
+     done
+}
+
+function analyze_track
+{
+     declare -a diff_size=()
+
+     sort_track
+
+     sp/write -a "${temp}/audio_pregap" &> /dev/null
+
+     declare -r sync='00 ff ff ff ff ff ff ff ff ff ff 00'
+
+     for (( j=0 ; j<${task_count} ; j++ )) ; do
+
+          local task=${task_list[j]}
+          local track="${file_path[${task}]}"
+
+          local sector="$(sp/read "${track}" 2364 5000 2> /dev/null)"
+
+          if [[ "${sector}" =~ "${sync}" ]]
+
+          then analyze_rdata "${track}"
+          else analyze_audio "${track}"
+
+          fi
+
+          check_track
+          print_track
+
+     done
+}
+
+function sort_track
+{
+     for (( j=0 ; j<${file_count} ; j++ )) ; do
+
+          if [[ "${rom_hash[j]}" == "${file_hash[j]}" ]]
+
+          then fine_list+=(${j})
+          else task_list+=(${j})
+
+               diff_size[j]=$((${rom_size[j]}-${file_size[j]}))
+               diff_size[j]=$((${diff_size[j]}/2352))
+
+          fi
+
+     done
+
+     fine_count=${#fine_list[@]}
+     task_count=${#task_list[@]}
+}
+
+function analyze_rdata
+{
+     local track="${1}"
+
+     if (( ${diff_size[${task}]} != 225 )) ; then
+
+          echo -e "\n\e[01;31mError: unexpected size for ${track}\e[0m"
+          exit 11
+
+     fi
+
+     # track start
+
+     local track_start="$(sp/read "${track}" 3 12 2> /dev/null)"
+
+     local track_min="${track_start:0:2}"
+     local track_sec="${track_start:3:2}"
+     local track_fra="${track_start:6:2}"
+
+     case "${track_min:0:1}" in
+
+          'a') track_min="10${track_min:1}" ;;
+          'b') track_min="11${track_min:1}" ;;
+          'c') track_min="12${track_min:1}" ;;
+
+          '0') track_min="${track_min:1}" ;;
+
+     esac
+
+     [[ "${track_sec:0:1}" == '0' ]] && track_sec="${track_sec:1}"
+     [[ "${track_fra:0:1}" == '0' ]] && track_fra="${track_fra:1}"
+
+     # blank start
+
+     declare -i blank_min=${track_min}
+     declare -i blank_sec=${track_sec}-2
+     declare -i blank_fra=${track_fra}
+
+     (( ${blank_sec} < 0 )) && { blank_sec+=60 ; blank_min+=-1 ; }
+
+     # pregap generation
+
+     sp/write -d "${temp}/data_pregap" ${blank_min} ${blank_sec} ${blank_fra} &> /dev/null
+
+     sp/edcre -s 75 -k "${temp}/data_pregap" &> /dev/null
+
+     fix_hash="$(cat "${temp}/data_pregap" "${track}" | md5sum)"
+     fix_hash="${fix_hash:0:32}"
+}
+
+function analyze_audio
+{
+     local track="${1}"
+
+     local size=${file_size[${task}]}
+     local diff=${diff_size[${task}]}
+
+     if (( ${task} > 2 ))
+
+     then local null=${null_high}
+          local null_data="${temp}/null_high"
+     else local null=${null_low}
+          local null_data="${temp}/null_low"
+
+     fi
+
+     case ${diff} in
+
+          150) fix_hash="$(
+
+                    tail --bytes=$((${size}-${null})) "${track}" |
+                    cat "${temp}/audio_pregap" - "${null_data}" |
+                    md5sum
+
+               )" ;;
+
+          75)  fix_hash="$(
+
+                    tail --bytes=$((${size}-${null})) "${track}" |
+                    cat "${temp}/audio_pregap" - "${null_data}" |
+                    head --bytes=$((${size}+176400)) |
+                    md5sum
+
+               )" ;;
+
+          0)   fix_hash="$(
+
+                    tail --bytes=$((${size}-${null})) "${track}" |
+                    cat "${temp}/audio_pregap" - "${null_data}" |
+                    head --bytes=$((${size})) |
+                    md5sum
+
+               )" ;;
+
+          *)   echo -e "\n\e[01;31mError: unexpected size for ${track}\e[0m"
+               exit 11 ;;
+
+     esac
+
+     fix_hash="${fix_hash:0:32}"
+}
+
+function check_track
+{
+     if [[ "${fix_hash}" == "${rom_hash[${task}]}" ]]
+
+     then pass_count+=1
+     else fail_count+=1
+
+     fi
+}
+
+function print_track
+{
+     echo -en "Analyzing track $((${task}+1))\r"
+}
+
+function print_report
+{
+     redump_name="${redump_name//'&amp;'/\&}"
+     redump_name="${redump_name//'&apos;'/\'}"
+     redump_name="${redump_name//'&quot;'/\"}"
+     redump_name="${redump_name//'&gt;'/\>}"
+     redump_name="${redump_name//'&lt;'/\<}"
+
+     echo -en "                  \r"
+
+     echo -e "\e[${region_color}m${redump_name}\e[0m"
+
+     echo "${match_count} / ${file_count} tracks match"
+
+     # DEBUG: if (( ${match_count} != ${file_count} )) ; then
+
+          # DEBUG: echo "${fine_count} / ${file_count} tracks match with no recalculation"
+          # DEBUG: echo "${pass_count} / ${file_count} tracks match with recalculation"
+          # DEBUG: echo "${fail_count} / ${file_count} tracks do not match"
+
+     # DEBUG: fi
+}
+
+# Script execution
+
+function execute
+{
+     [[ "${d_arg}" == 'true' ]] && download_database
+
+     check_setup
+     get_version
+
+     [[ "${v_arg}" == 'true' ]] && print_version
+
+     get_disc_info
+     get_file_info
+
+     identify_tosec
+     measure_offset
+     identify_redump
+}
+
+cd "${path}" || exit 1
+
+execute
